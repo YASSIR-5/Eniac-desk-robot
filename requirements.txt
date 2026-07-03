@@ -1,0 +1,22 @@
+# ENIAC Pi Requirements
+# Install with: pip install -r requirements.txt
+
+# Wake word detection
+openwakeword==0.4.0
+
+# Audio capture
+sounddevice
+
+# Audio resampling (48kHz mic -> 16kHz model)
+scipy
+
+# Image handling for face display
+Pillow
+
+# Adafruit display libraries (ILI9341 SPI screen)
+adafruit-circuitpython-rgb-display
+adafruit-blinka
+RPi.GPIO
+
+# Numerical processing
+numpy
