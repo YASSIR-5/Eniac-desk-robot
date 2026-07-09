@@ -2,7 +2,7 @@
 # Install with: pip install -r requirements.txt
 
 # Wake word detection
-openwakeword==0.4.0
+# openwakeword==0.4.0
 
 # Audio capture
 sounddevice
@@ -20,3 +20,7 @@ RPi.GPIO
 
 # Numerical processing
 numpy
+
+groq
+
+PyAudio
