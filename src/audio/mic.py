@@ -1,6 +1,4 @@
 # src/audio/mic.py
-import time
-# src/audio/mic.py
 import threading
 import numpy as np
 import sounddevice as sd
@@ -10,9 +8,11 @@ RATE = 48000          # Must match SAMPLE_RATE in main.py
 CHUNK = 1024          # frames per block
 
 # VAD tuning
-ENERGY_THRESHOLD = 0.004   # adjust if needed
-MIN_ACTIVE_BLOCKS = 8      # loud blocks before "speech start"
-MIN_SILENT_BLOCKS = 25     # quiet blocks before "speech end"
+ENERGY_THRESHOLD = 0.008   # raised: reduces false triggers from background noise
+MIN_ACTIVE_BLOCKS = 5      # lowered: reacts faster to speech start
+MIN_SILENT_BLOCKS = 50     # raised: waits longer before cutting off end of sentence
+
+PRE_BUFFER_MAX = 20        # ~0.4s of audio kept before speech starts
 
 
 class MicVAD:
@@ -36,23 +36,16 @@ class MicVAD:
         self._active_count = 0
         self._silent_count = 0
 
-        self._buffer = []  # stores audio blocks for current utterance
+        self._pre_buffer = []   # rolling window before speech starts (~0.4s)
+        self._buffer = []       # active utterance audio
 
     def _callback(self, indata, frames, time_info, status):
-        if status:
-            # print("Status:", status)  # optional
-            pass
-
         # int16 -> float32 in [-1, 1]
         audio = np.frombuffer(indata, dtype=np.int16).astype(np.float32) / 32768.0
-
-        # append to buffer
-        self._buffer.append(audio.copy())
 
         # RMS energy
         energy = np.sqrt(np.mean(audio ** 2))
 
-        # VAD state tracking
         if energy > ENERGY_THRESHOLD:
             self._active_count += 1
             self._silent_count = 0
@@ -60,31 +53,44 @@ class MicVAD:
             self._silent_count += 1
             self._active_count = 0
 
-        # START of speech
-        if not self._speaking and self._active_count >= MIN_ACTIVE_BLOCKS:
-            self._speaking = True
-            self._silent_count = 0
-            self._buffer = []  # reset buffer at speech start
-            if self.on_speech_start:
-                self.on_speech_start()
+        if not self._speaking:
+            # Keep a rolling pre-speech window so first words aren't lost
+            self._pre_buffer.append(audio.copy())
+            if len(self._pre_buffer) > PRE_BUFFER_MAX:
+                self._pre_buffer.pop(0)
 
-        # END of speech
-        elif self._speaking and self._silent_count >= MIN_SILENT_BLOCKS:
-            self._speaking = False
-            self._active_count = 0
+            # START of speech
+            if self._active_count >= MIN_ACTIVE_BLOCKS:
+                self._speaking = True
+                self._silent_count = 0
+                # Seed buffer with pre-speech audio so first syllable is captured
+                self._buffer = list(self._pre_buffer)
+                self._pre_buffer = []
+                if self.on_speech_start:
+                    self.on_speech_start()
 
-            # concatenate buffered audio
-            if self._buffer:
-                utterance = np.concatenate(self._buffer)
-            else:
-                utterance = None
-            self._buffer = []
+        else:
+            # Accumulate speech audio
+            self._buffer.append(audio.copy())
 
-            if self.on_speech_end:
-                self.on_speech_end()
+            # END of speech
+            if self._silent_count >= MIN_SILENT_BLOCKS:
+                self._speaking = False
+                self._active_count = 0
 
-            if self.on_utterance and utterance is not None:
-                self.on_utterance(utterance)
+                utterance = np.concatenate(self._buffer) if self._buffer else None
+                self._buffer = []
+
+                if self.on_speech_end:
+                    self.on_speech_end()
+
+                # Offload to a thread — never block the audio callback
+                if self.on_utterance and utterance is not None:
+                    threading.Thread(
+                        target=self.on_utterance,
+                        args=(utterance,),
+                        daemon=True,
+                    ).start()
 
     def _run(self):
         with sd.RawInputStream(

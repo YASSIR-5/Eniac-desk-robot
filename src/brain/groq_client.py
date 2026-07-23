@@ -52,26 +52,35 @@ def transcribe_audio_numpy(audio: np.ndarray, sample_rate: int) -> str:
     return text
 
 
-def generate_reply(prompt: str) -> str:
-    """
-    Call Groq LLaMA model for a short, playful reply.
-    """
+MAX_HISTORY = 8  # keeps last 8 exchanges (16 messages)
+
+SYSTEM_PROMPT = (
+    "You are ENIAC, a small desk robot assistant, present-day, year 2026. "
+    "Never mention being decommissioned, historical dates, or old computer trivia. "
+    "Talk like a real person, not a corporate assistant. "
+    "Be straight to the point. Be witty and a bit dry, but never generic, cheesy, or clingy. "
+    "Match your answer length to the question: "
+    "if it's a yes/no or single-fact question, answer in as few words as possible. "
+    "if it needs steps or explanation (like a recipe or instructions), give a real, complete, short answer — don't refuse or shorten it into nothing. "
+    "if the user's input is incomplete, unclear, or sounds cut off (like a lone word or half a sentence), "
+    "say something like 'you got cut off' or 'say that again' — do NOT try to guess or answer it. "
+    "if the user is just testing the mic (e.g. 'test, test', 'can you hear me'), respond briefly confirming you can hear them, nothing more. "
+    "Never pad answers with filler like 'I'm functioning within normal parameters' or 'I'm ready to assist.'"
+)
+
+
+def generate_reply(prompt: str, history: list = None) -> str:
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+    if history:
+        messages.extend(history[-MAX_HISTORY * 2:])
+
+    messages.append({"role": "user", "content": prompt})
 
     completion = _client.chat.completions.create(
         model=LLM_MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are ENIAC, a funny, friendly desk robot. "
-                    "Always answer in ONE short sentence, playful but not noisy."
-                ),
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            },
-        ],
-        max_tokens=40,  # shorter replies
+        messages=messages,
+        max_tokens=80,   # raised from 20 so real answers (recipes, steps) aren't cut off
+        temperature=0.4,
     )
     return completion.choices[0].message.content.strip()

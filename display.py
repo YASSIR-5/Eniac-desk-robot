@@ -48,7 +48,7 @@ disp = ili9341.ILI9341(
     cs=cs_pin,
     dc=dc_pin,
     rst=reset_pin,
-    baudrate=24000000,
+    baudrate=40000000,
 )
 
 # ---- Load face images ----

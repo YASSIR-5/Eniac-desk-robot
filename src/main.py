@@ -70,7 +70,7 @@ class ENIACController:
         self.face.show_text_reply(reply)
 
         # Let the reply stay visible for a bit, then go back to idle
-        time.sleep(3.0)
+        time.sleep(6.0)
         self.face.set_state(STATE_IDLE)
 
     # ---- Lifecycle ----
