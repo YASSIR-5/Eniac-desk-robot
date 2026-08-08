@@ -3,6 +3,7 @@ import time
 from typing import Optional
 
 import numpy as np
+from src.audio.tts import speak
 
 from src.audio.mic import MicVAD
 from src.faces.display_loop import (
@@ -10,41 +11,35 @@ from src.faces.display_loop import (
     STATE_IDLE,
     STATE_LISTENING,
     STATE_THINKING,
+    STATE_SPEAKING,
+    STATE_ERROR, 
+    STATE_WINK,
 )
 from src.brain.groq_client import transcribe_audio_numpy, generate_reply
 
+SHOW_REPLY_ON_SCREEN = False 
 SAMPLE_RATE = 48000  # must match RATE in MicVAD
 
 
 class ENIACController:
-    """
-    High-level orchestrator for ENIAC's behavior:
-    - controls face states
-    - triggers STT + LLM on utterances
-    - shows replies on screen
-    """
-
     def __init__(self):
         self.face = FaceDisplay()
         self.vad: Optional[MicVAD] = None
+        self.history = []        # conversation memory
+        self.MAX_TURNS = 8       # keep last 8 exchanges
 
-    # ---- MicVAD callbacks ----
     def on_speech_start(self):
-        # User started speaking → listening face
         print("[DEBUG] speech start")
         self.face.set_state(STATE_LISTENING)
 
     def on_speech_end(self):
-        # We do nothing here; we wait for full utterance in on_utterance
         print("[DEBUG] speech end")
 
     def on_utterance(self, audio_np: np.ndarray):
         print(f"[DEBUG] on_utterance called, samples={len(audio_np)}")
 
-        # 1) Thinking face
         self.face.set_state(STATE_THINKING)
 
-        # 2) STT via Groq Whisper
         try:
             text = transcribe_audio_numpy(audio_np, SAMPLE_RATE)
         except Exception as e:
@@ -56,27 +51,36 @@ class ENIACController:
         else:
             print("USER:", text)
 
-            # 3) LLM via Groq LLaMA
             try:
-                reply = generate_reply(text)
+                result = generate_reply(text, history=self.history)
+                reply = result["text"]
+                mood = result["mood"]
             except Exception as e:
                 print("[LLM error]", e)
                 reply = "My brain glitched. Try again?"
+                mood = "neutral"
+
+            # Update memory after a successful exchange
+            self.history.append({"role": "user", "content": text})
+            self.history.append({"role": "assistant", "content": reply})
+            if len(self.history) > self.MAX_TURNS * 2:
+                self.history = self.history[-self.MAX_TURNS * 2:]
 
         print("ENIAC:", reply)
 
-        # 4) Show reply on screen under the eyes
-        # Requires FaceDisplay.show_text_reply(text) to be implemented in display_loop.py
-        self.face.show_text_reply(reply)
+        if SHOW_REPLY_ON_SCREEN:
+            self.face.show_text_reply(reply)
+        else:
+            self.face.set_state(STATE_SPEAKING)
 
-        # Let the reply stay visible for a bit, then go back to idle
-        time.sleep(6.0)
+        speak(reply)  # must block until audio playback finishes
+
         self.face.set_state(STATE_IDLE)
 
     # ---- Lifecycle ----
     def start(self):
         # Start face animation; smaller delay = faster GIF
-        self.face.start(frame_delay_s=0.03)
+        self.face.start(frame_delay_s=0.9)
 
         # Start VAD with callbacks
         self.vad = MicVAD(

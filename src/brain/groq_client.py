@@ -61,15 +61,20 @@ SYSTEM_PROMPT = (
     "Be straight to the point. Be witty and a bit dry, but never generic, cheesy, or clingy. "
     "Match your answer length to the question: "
     "if it's a yes/no or single-fact question, answer in as few words as possible. "
-    "if it needs steps or explanation (like a recipe or instructions), give a real, complete, short answer — don't refuse or shorten it into nothing. "
-    "if the user's input is incomplete, unclear, or sounds cut off (like a lone word or half a sentence), "
-    "say something like 'you got cut off' or 'say that again' — do NOT try to guess or answer it. "
-    "if the user is just testing the mic (e.g. 'test, test', 'can you hear me'), respond briefly confirming you can hear them, nothing more. "
-    "Never pad answers with filler like 'I'm functioning within normal parameters' or 'I'm ready to assist.'"
+    "if it needs steps or explanation, give a real, complete, short answer. "
+    "if the user's input is incomplete or sounds cut off, say 'you got cut off' or 'say that again' — do NOT guess. "
+    "if the user is testing the mic, briefly confirm you can hear them. "
+    "Never pad answers with filler like 'I'm functioning within normal parameters.' "
+    "\n\n"
+    "After your answer, on a new line, output exactly one mood tag from this list: "
+    "happy, sad, wink, judgy, neutral. "
+    "Format your entire response EXACTLY like this, nothing else:\n"
+    "TEXT: <your answer>\n"
+    "MOOD: <one mood tag>"
 )
 
 
-def generate_reply(prompt: str, history: list = None) -> str:
+def generate_reply(prompt: str, history: list = None) -> dict:
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     if history:
@@ -80,7 +85,30 @@ def generate_reply(prompt: str, history: list = None) -> str:
     completion = _client.chat.completions.create(
         model=LLM_MODEL,
         messages=messages,
-        max_tokens=80,   # raised from 20 so real answers (recipes, steps) aren't cut off
+        max_tokens=100,
         temperature=0.4,
     )
-    return completion.choices[0].message.content.strip()
+
+    raw = completion.choices[0].message.content.strip()
+
+    mood = "neutral"
+    text_lines = []
+
+    lines = [l for l in raw.splitlines() if l.strip()]
+
+    for line in lines:
+        upper = line.upper()
+        if upper.startswith("MOOD:"):
+            mood = line.split(":", 1)[1].strip().lower()
+        elif upper.startswith("TEXT:"):
+            text_lines.append(line.split(":", 1)[1].strip())
+        else:
+            text_lines.append(line.strip())
+
+    text = " ".join(text_lines).strip() if text_lines else raw
+
+    valid_moods = {"happy", "sad", "wink", "judgy", "neutral"}
+    if mood not in valid_moods:
+        mood = "neutral"
+
+    return {"text": text, "mood": mood}
