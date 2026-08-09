@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 import edge_tts
 
-VOICE = "en-US-GuyNeural"  # change voice here if you want a different one
+VOICE = "en-US-AvaMultilingualNeural"  # change voice here if you want a different one
 
 
 async def _generate_speech(text: str, out_path: Path):
