@@ -1,49 +1,64 @@
-# src/audio/mic.py
 import threading
+import time
+
 import numpy as np
 import sounddevice as sd
 
-# Audio settings
-RATE = 48000          # Must match SAMPLE_RATE in main.py
-CHUNK = 1024          # frames per block
 
-# VAD tuning
-ENERGY_THRESHOLD = 0.008   # raised: reduces false triggers from background noise
-MIN_ACTIVE_BLOCKS = 5      # lowered: reacts faster to speech start
-MIN_SILENT_BLOCKS = 50     # raised: waits longer before cutting off end of sentence
+RATE = 48000
+CHUNK = 1024
 
-PRE_BUFFER_MAX = 20        # ~0.4s of audio kept before speech starts
+ENERGY_THRESHOLD = 0.004
+MIN_ACTIVE_BLOCKS = 5
+MIN_SILENT_BLOCKS = 50
+PRE_BUFFER_MAX = 20
+
+NO_SPEECH_TIMEOUT_S = 7.0
 
 
 class MicVAD:
     """
-    Simple energy-based VAD:
-    - on_speech_start(): called when voice activity begins
-    - on_speech_end():   called when voice activity ends
-    - on_utterance(audio_np): called once per utterance with full audio
+    Records one request after ENIAC wakes.
+
+    - Waits up to 7 seconds for speech.
+    - Starts recording when speech is detected.
+    - Stops after MIN_SILENT_BLOCKS.
+    - Releases the microphone after one utterance.
     """
 
-    def __init__(self, on_speech_start, on_speech_end, on_utterance=None, device=None):
+    def __init__(
+        self,
+        on_speech_start=None,
+        on_speech_end=None,
+        on_utterance=None,
+        on_timeout=None,
+        device=None,
+    ):
         self.on_speech_start = on_speech_start
         self.on_speech_end = on_speech_end
         self.on_utterance = on_utterance
+        self.on_timeout = on_timeout
         self.device = device
 
         self._thread = None
-        self._stop_flag = False
+        self._stop_event = threading.Event()
 
         self._speaking = False
+        self._finished = False
         self._active_count = 0
         self._silent_count = 0
 
-        self._pre_buffer = []   # rolling window before speech starts (~0.4s)
-        self._buffer = []       # active utterance audio
+        self._pre_buffer = []
+        self._buffer = []
+        self._started_at = 0.0
 
     def _callback(self, indata, frames, time_info, status):
-        # int16 -> float32 in [-1, 1]
-        audio = np.frombuffer(indata, dtype=np.int16).astype(np.float32) / 32768.0
+        if self._finished:
+            return
 
-        # RMS energy
+        audio = np.frombuffer(indata, dtype=np.int16).astype(np.float32)
+        audio /= 32768.0
+
         energy = np.sqrt(np.mean(audio ** 2))
 
         if energy > ENERGY_THRESHOLD:
@@ -54,65 +69,103 @@ class MicVAD:
             self._active_count = 0
 
         if not self._speaking:
-            # Keep a rolling pre-speech window so first words aren't lost
             self._pre_buffer.append(audio.copy())
+
             if len(self._pre_buffer) > PRE_BUFFER_MAX:
                 self._pre_buffer.pop(0)
 
-            # START of speech
             if self._active_count >= MIN_ACTIVE_BLOCKS:
                 self._speaking = True
                 self._silent_count = 0
-                # Seed buffer with pre-speech audio so first syllable is captured
                 self._buffer = list(self._pre_buffer)
                 self._pre_buffer = []
+
                 if self.on_speech_start:
                     self.on_speech_start()
 
-        else:
-            # Accumulate speech audio
-            self._buffer.append(audio.copy())
+            return
 
-            # END of speech
-            if self._silent_count >= MIN_SILENT_BLOCKS:
-                self._speaking = False
-                self._active_count = 0
+        self._buffer.append(audio.copy())
 
-                utterance = np.concatenate(self._buffer) if self._buffer else None
-                self._buffer = []
+        if self._silent_count < MIN_SILENT_BLOCKS:
+            return
 
-                if self.on_speech_end:
-                    self.on_speech_end()
+        self._finished = True
+        self._speaking = False
+        self._stop_event.set()
 
-                # Offload to a thread — never block the audio callback
-                if self.on_utterance and utterance is not None:
-                    threading.Thread(
-                        target=self.on_utterance,
-                        args=(utterance,),
-                        daemon=True,
-                    ).start()
+        utterance = np.concatenate(self._buffer) if self._buffer else None
+        self._buffer = []
+
+        if self.on_speech_end:
+            self.on_speech_end()
+
+        if self.on_utterance and utterance is not None:
+            threading.Thread(
+                target=self.on_utterance,
+                args=(utterance,),
+                daemon=True,
+            ).start()
 
     def _run(self):
-        with sd.RawInputStream(
-            samplerate=RATE,
-            blocksize=CHUNK,
-            dtype="int16",
-            channels=1,
-            device=self.device,
-            callback=self._callback,
-        ):
-            while not self._stop_flag:
-                sd.sleep(50)
+        try:
+            with sd.RawInputStream(
+                samplerate=RATE,
+                blocksize=CHUNK,
+                dtype="int16",
+                channels=1,
+                device=self.device,
+                latency="high",
+                callback=self._callback,
+            ):
+                self._started_at = time.monotonic()
+
+                while not self._stop_event.is_set():
+                    no_speech_yet = not self._speaking
+                    elapsed = time.monotonic() - self._started_at
+
+                    if no_speech_yet and elapsed >= NO_SPEECH_TIMEOUT_S:
+                        self._finished = True
+                        self._stop_event.set()
+
+                        if self.on_timeout:
+                            threading.Thread(
+                                target=self.on_timeout,
+                                daemon=True,
+                            ).start()
+
+                        break
+
+                    sd.sleep(50)
+
+        except Exception as e:
+            print(f"[Mic error] {e}")
 
     def start(self):
-        if self._thread is not None:
+        if self._thread is not None and self._thread.is_alive():
             return
-        self._stop_flag = False
+
+        self._stop_event.clear()
+        self._speaking = False
+        self._finished = False
+        self._active_count = 0
+        self._silent_count = 0
+        self._pre_buffer = []
+        self._buffer = []
+
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
+        print("[Mic] Waiting up to 7 seconds for a request.")
+
     def stop(self):
-        self._stop_flag = True
-        if self._thread is not None:
+        self._stop_event.set()
+
+        if (
+            self._thread is not None
+            and self._thread.is_alive()
+            and self._thread is not threading.current_thread()
+        ):
             self._thread.join(timeout=1.0)
+
         self._thread = None
