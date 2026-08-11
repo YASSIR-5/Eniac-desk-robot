@@ -1,8 +1,11 @@
 import asyncio
+import re
 import subprocess
 import tempfile
+import random 
+import time 
 from pathlib import Path
-import re 
+
 import edge_tts
 
 
@@ -16,30 +19,49 @@ async def _generate_speech(text: str, out_path: Path):
     await communicate.save(str(out_path))
 
 
-def _play_mp3(path: Path):
-    subprocess.run(
+def _play_mp3(path: Path, on_playback_start=None, stop_event=None):
+    process = subprocess.Popen(
         ["mpg123", "-q", str(path)],
-        check=True,
     )
+
+    if on_playback_start:
+        on_playback_start()
+
+    while process.poll() is None:
+        if stop_event is not None and stop_event.is_set():
+            process.terminate()
+            try:
+                process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+            return
+        time.sleep(0.05)
+
+    return_code = process.returncode
+
+    if return_code != 0 and not (stop_event is not None and stop_event.is_set()):
+        raise subprocess.CalledProcessError(
+            return_code,
+            ["mpg123", "-q", str(path)],
+        )
+
 
 def _prepare_text(text: str):
     return re.sub(r"\beniac\b", "Eniac", text, flags=re.IGNORECASE)
 
-def speak(text: str):
-    """
-    Generate spoken text with Ava and play it through the 3.5 mm jack.
-    Blocks until generation and playback finish.
-    """
+
+def speak(text: str, on_playback_start=None, stop_event=None):
     if not text:
         return
-    
+
     text = _prepare_text(text)
+
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
         tmp_path = Path(tmp.name)
 
     try:
         asyncio.run(_generate_speech(text, tmp_path))
-        _play_mp3(tmp_path)
+        _play_mp3(tmp_path, on_playback_start=on_playback_start, stop_event=stop_event)
 
     except Exception as e:
         print(f"[TTS error] {e}")
@@ -54,7 +76,6 @@ def speak(text: str):
 def play_effect(filename: str):
     """
     Play a local MP3 from src/audio/Sound_Effects.
-    This function blocks, so display callbacks call it in a separate thread.
     """
     path = SOUND_EFFECT_DIR / filename
 
@@ -74,7 +95,24 @@ def play_bootup():
 
 def play_sleep():
     play_effect("Sleep.mp3")
-    
+
 
 def play_soft():
-    play_effect("Soft.mp3") 
+    play_effect("Soft.mp3")
+    
+    
+THINKING_PHRASES = [
+    "Thinking_01.mp3",
+    "Thinking_02.mp3",
+    "Thinking_03.mp3",
+    "Thinking_04.mp3",
+    "Thinking_05.mp3",
+    "Thinking_06.mp3",
+    "Thinking_07.mp3",
+    "Thinking_08.mp3",
+]
+
+
+def play_random_thinking_phrase():
+    filename = random.choice(THINKING_PHRASES)
+    play_effect(filename)    
