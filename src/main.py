@@ -145,8 +145,8 @@ class ENIACController:
 
         self._speaking_stop_event.clear()
         time.sleep(0.05)
-        self._start_wake_listener()
-
+        threading.Thread(target=self._start_wake_listener, daemon=True).start()
+        
         result_holder = {}
         done_event = threading.Event()
 
