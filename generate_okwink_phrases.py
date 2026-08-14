@@ -6,16 +6,14 @@ import edge_tts
 VOICE = "en-US-AvaMultilingualNeural"
 OUT_DIR = Path(__file__).resolve().parent / "src" / "audio" / "Sound_Effects"
 
-# Replaces the old 8-phrase set. This overwrites Thinking_01.mp3
-# through Thinking_05.mp3 with the new wording; Thinking_06/07/08.mp3
-# from the old set are no longer referenced (safe to delete manually,
-# or just leave them unused on disk).
 PHRASES = {
-    "Thinking_01.mp3": "Computing.",
-    "Thinking_02.mp3": "Processing.",
-    "Thinking_03.mp3": "Working on it.",
-    "Thinking_04.mp3": "Wait a second.",
-    "Thinking_05.mp3": "Searching for it.",
+    "OkWink_01.mp3": "On it.",
+    "OkWink_02.mp3": "Got it.",
+    "OkWink_03.mp3": "OK.",
+    "OkWink_04.mp3": "Copy that.",
+    "OkWink_05.mp3": "Understood.",
+    "OkWink_06.mp3": "Gotcha.",
+    "OkWink_07.mp3": "Got you.",
 }
 
 

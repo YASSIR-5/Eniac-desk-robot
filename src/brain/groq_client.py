@@ -9,10 +9,29 @@ from groq import Groq
 
 from src.config import GROQ_API_KEY
 
-WHISPER_MODEL = "whisper-large-v3-turbo"
+# Switched from whisper-large-v3-turbo to the full whisper-large-v3.
+# Turbo is a pruned/distilled model that trades accuracy for speed
+# (32 decoder layers cut down to 4). On short, low-context commands
+# like "power off" or "turn off" that accuracy loss matters a lot more
+# than on full sentences/questions, where surrounding words give the
+# model context to recover from a slightly clipped or mis-heard word.
+# Both models are free on Groq's tier (2,000 audio requests/day
+# either way), so this costs nothing.
+WHISPER_MODEL = "whisper-large-v3"
 LLM_MODEL = "llama-3.1-8b-instant"
 
 _client = Groq(api_key=GROQ_API_KEY)
+
+# Biases Whisper toward the short command vocabulary ENIAC actually
+# needs to recognize reliably. This is a documented Whisper/Groq API
+# parameter (prompt), not a guess — it nudges the decoder toward these
+# words/phrases when the audio is ambiguous, which is exactly the
+# failure mode on clipped or mis-heard short commands (e.g. "power
+# off" being transcribed as "power of").
+COMMAND_PROMPT = (
+    "Power off. Shut down. Turn off. Hey Jarvis. "
+    "What time is it. Set a timer."
+)
 
 
 def transcribe_audio_numpy(audio: np.ndarray, sample_rate: int) -> str:
@@ -41,6 +60,7 @@ def transcribe_audio_numpy(audio: np.ndarray, sample_rate: int) -> str:
         resp = _client.audio.transcriptions.create(
             file=tmp_path,
             model=WHISPER_MODEL,
+            prompt=COMMAND_PROMPT,
         )
         text = resp.text
     finally:

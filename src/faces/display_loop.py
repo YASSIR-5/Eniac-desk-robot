@@ -24,6 +24,7 @@ STATE_SPEAKING = "speaking"
 STATE_ERROR = "error"
 STATE_JUDGE = "judge"
 STATE_SLEEPING = "sleeping"
+STATE_TURNING_OFF = "turning_off"
 
 
 BLINK_MIN_S = 2.5
@@ -79,6 +80,7 @@ class FaceDisplay:
             STATE_JUDGE: self._load_pngs(["Judge.png"]),
             STATE_SLEEPING: self._load_pngs(["Sleeping.png"]),
             "blink": self._load_pngs(["Blink.png"]),
+            STATE_TURNING_OFF: self._load_pngs(["Turn_Off.png"]),
         }
 
         self.loading_frames = self._build_loading_frames()
@@ -273,9 +275,7 @@ class FaceDisplay:
                 self.set_state(STATE_IDLE)
                 continue
 
-            if state == STATE_OK_WINK and state_age >= OK_WINK_DURATION_S:
-                self.set_state(STATE_THINKING)
-                continue
+            
 
             if (
                 state == STATE_SLEEPING

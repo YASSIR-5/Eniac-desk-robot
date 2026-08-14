@@ -109,11 +109,15 @@ class WakeWordListener:
             except queue.Empty:
                 break
 
+        _t0 = time.time()
+        print(f"[TIMING] wake_word.start(): about to load model: {_t0:.3f}")
         try:
             self.model = self._create_fresh_model()
         except Exception as e:
             print(f"[Wake word error] Could not load model: {e}")
             return
+        _t1 = time.time()
+        print(f"[TIMING] wake_word.start(): model loaded in {_t1 - _t0:.3f}s (finished at {_t1:.3f})")
 
         self._last_detected = 0.0
         self._stop_event.clear()

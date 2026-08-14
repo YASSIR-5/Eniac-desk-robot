@@ -1,3 +1,4 @@
+import re
 import threading
 import time
 from typing import Optional
@@ -8,7 +9,16 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="onnxruntime")
 
 from src.audio.mic import MicVAD, RATE
-from src.audio.tts import play_bootup, play_sleep, play_soft, play_random_thinking_phrase, speak
+from src.audio.tts import (
+    play_bootup,
+    play_sleep,
+    play_soft,
+    play_random_ok_wink_phrase,
+    play_random_thinking_phrase,
+    play_random_goodbye,
+    play_turning_off,
+    speak,
+)
 from src.audio.wake_word import WakeWordListener
 from src.brain.groq_client import generate_reply, transcribe_audio_numpy
 from src.faces.display_loop import (
@@ -20,6 +30,7 @@ from src.faces.display_loop import (
     STATE_OK_WINK,
     STATE_SPEAKING,
     STATE_THINKING,
+    STATE_TURNING_OFF,
 )
 
 
@@ -27,10 +38,9 @@ SAMPLE_RATE = RATE
 
 JUDGE_DURATION_S = 2.0
 OK_WINK_DURATION_S = 1.0
+THINKING_PROMPT_DELAY_S = 1.2
 
-THINKING_PROMPT_DELAY_S = 0.8
-
-SHUTDOWN_PHRASES = ("shut down","off" "shutdown", "power off", "turn off")
+SHUTDOWN_PATTERN = re.compile(r"\b(shut ?down|power ?off|turn ?off)\b")
 
 
 class ENIACController:
@@ -63,8 +73,8 @@ class ENIACController:
     def _return_to_idle(self, gen):
         with self._lock:
             if gen != self._generation:
-             return
-        self._busy = False
+                return
+            self._busy = False
 
         self.face.clear_text()
         self.face.set_state(STATE_IDLE)
@@ -95,7 +105,7 @@ class ENIACController:
                 on_utterance=lambda audio, gen=my_gen: self._on_utterance(audio, gen),
                 on_timeout=lambda gen=my_gen: self._on_no_request(gen),
                 device=None,
-    )
+            )
             self.vad.start()
 
     def _on_speech_start(self):
@@ -103,8 +113,13 @@ class ENIACController:
         self.face.set_state(STATE_LISTENING)
 
     def _on_speech_end(self):
+        # Face stays on Listening — Ok-Wink only shows up later, and
+        # only if STT reveals this isn't a shutdown command. This is
+        # what lets the shutdown path skip straight to Turning Off
+        # with zero Ok-Wink/Thinking detour, while normal questions
+        # still get the Ok-Wink acknowledgment beat.
         print("[VAD] Speech ended.")
-        self.face.set_state(STATE_OK_WINK)
+        self.face.set_state(STATE_LISTENING)
 
     def _on_no_request(self, gen):
         with self._lock:
@@ -116,7 +131,6 @@ class ENIACController:
         time.sleep(JUDGE_DURATION_S)
         self._return_to_idle(gen)
 
-
     def _on_utterance(self, audio_np: np.ndarray, gen: int):
         print(f"[VAD] Captured {len(audio_np)} audio samples.")
 
@@ -126,15 +140,9 @@ class ENIACController:
             print("[TTS] Playback started.")
             self.face.set_state(STATE_SPEAKING)
 
-        time.sleep(OK_WINK_DURATION_S)
-
         if gen != self._generation:
             return
 
-        self.face.set_state(STATE_THINKING)
-
-        # Mic is free now — re-enable wake word to catch a barge-in
-        # during Thinking/Speaking.
         self._speaking_stop_event.clear()
         time.sleep(0.05)
         self._start_wake_listener()
@@ -154,10 +162,10 @@ class ENIACController:
 
         threading.Thread(target=worker, daemon=True).start()
 
-        if not done_event.wait(timeout=THINKING_PROMPT_DELAY_S):
-            if gen == self._generation:
-                play_random_thinking_phrase()
-            done_event.wait()
+        # Face stays on Listening for the entire STT call, however
+        # long it takes. We don't know yet if this is a shutdown
+        # command, so no Ok-Wink, no Thinking, no filler phrase here.
+        done_event.wait()
 
         if gen != self._generation:
             return
@@ -183,19 +191,17 @@ class ENIACController:
 
         print("USER:", text)
 
-        # --- Local shutdown command, bypasses Groq entirely ---
-        if any(phrase in text.lower() for phrase in SHUTDOWN_PHRASES):
+        # Turning Off Loop — branches directly off STT End, before
+        # Ok-Wink ever shows, exactly like the diagram.
+        if SHUTDOWN_PATTERN.search(text.lower()):
             print("[System] Shutdown command received.")
 
             if gen != self._generation:
                 return
 
-            self.face.set_state(STATE_THINKING)
-            speak(
-                "Shutting down now. See you soon.",
-                on_playback_start=voice_started,
-                stop_event=self._speaking_stop_event,
-            )
+            self.face.set_state(STATE_TURNING_OFF)
+            play_random_goodbye()
+            play_turning_off()
 
             if self.wake is not None:
                 self.wake.stop()
@@ -205,6 +211,16 @@ class ENIACController:
 
             os.system("sudo shutdown -h now")
             return
+
+        # --- Normal path: Ok-Wink (1s, with phrase) -> Thinking ---
+        self.face.set_state(STATE_OK_WINK)
+        threading.Thread(target=play_random_ok_wink_phrase, daemon=True).start()
+        time.sleep(OK_WINK_DURATION_S)
+
+        if gen != self._generation:
+            return
+
+        self.face.set_state(STATE_THINKING)
 
         llm_result_holder = {}
         llm_done_event = threading.Event()
@@ -237,8 +253,6 @@ class ENIACController:
             self.history = self.history[-self.max_turns * 2:]
 
         print("ENIAC:", reply)
-
-        self.face.set_state(STATE_THINKING)
 
         speak(
             reply,
