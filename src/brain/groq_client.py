@@ -18,7 +18,7 @@ from src.config import GROQ_API_KEY
 # Both models are free on Groq's tier (2,000 audio requests/day
 # either way), so this costs nothing.
 WHISPER_MODEL = "whisper-large-v3"
-LLM_MODEL = "llama-3.1-8b-instant"
+LLM_MODEL = "openai/gpt-oss-20b"
 
 _client = Groq(api_key=GROQ_API_KEY)
 
